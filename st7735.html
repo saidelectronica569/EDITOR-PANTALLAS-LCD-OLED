@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Editor ST7735 Profesional</title>
+<style>
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #1e1e2f;
+  color: #f0f0f0;
+  margin: 0;
+  padding: 20px;
+}
+h1 { text-align: center; margin-bottom: 20px; }
+
+#container { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+
+#tools {
+  background: #2e2e4f;
+  padding: 20px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 240px;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+}
+
+#tools button, #tools input, #tools select {
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 5px;
+  font-size: 14px;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+#tools button:hover { background: #5e5ecf; color: white; }
+
+#screenContainer {
+  background: #22223b;
+  padding: 10px;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+canvas {
+  border: 3px solid #f0f0f0;
+  image-rendering: pixelated;
+  cursor: crosshair;
+  background: black;
+}
+
+textarea {
+  margin-top: 15px;
+  width: 400px;
+  height: 300px;
+  border-radius: 10px;
+  border: none;
+  padding: 10px;
+  font-family: monospace;
+  background: #2e2e4f;
+  color: #f0f0f0;
+  resize: none;
+}
+</style>
+</head>
+<body>
+
+<h1>Editor ST7735 Profesional</h1>
+<div id="container">
+
+  <div id="tools">
+    <label>Resolución:
+      <select id="resolution">
+        <option value="128x160">128x160</option>
+        <option value="160x128" selected>160x128</option>
+        <option value="128x128">128x128</option>
+        <option value="160x80">160x80</option>
+      </select>
+    </label>
+
+    <label>Color: <input type="color" id="colorPicker" value="#ff0000"></label>
+    <label>Tamaño pincel: <input type="number" id="brushSize" value="4" min="1" max="20"></label>
+
+    <button id="brushBtn">Pincel</button>
+    <button id="rectBtn">Rectángulo</button>
+    <button id="circleBtn">Círculo</button>
+    <button id="textBtn">Texto</button>
+    <button id="eraseBtn">Borrar</button>
+
+    <button id="undoBtn">Deshacer</button>
+    <button id="redoBtn">Rehacer</button>
+    <button id="clearBtn">Limpiar</button>
+
+    <input type="file" id="importImg" accept=".png, .jpg, .jpeg">
+
+    <button id="zoomIn">Zoom +</button>
+    <button id="zoomOut">Zoom -</button>
+
+    <button id="exportBtn">Exportar Código Arduino (PROGMEM)</button>
+  </div>
+
+  <div id="screenContainer">
+    <canvas id="screen" width="160" height="128"></canvas>
+    <textarea id="arduinoCode" placeholder="Aquí aparecerá el código Arduino..."></textarea>
+  </div>
+
+</div>
+
+<script>
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+
+let brushColor = document.getElementById('colorPicker').value;
+let brushSize = parseInt(document.getElementById('brushSize').value);
+let tool = 'brush';
+let zoom = 1;
+let startX, startY;
+let isDrawing = false;
+
+// Historial
+let history = [];
+let redoHistory = [];
+
+// Resolución
+const resolutionSelect = document.getElementById('resolution');
+let [resW,resH] = [160,128];
+
+// Inicializar canvas
+ctx.fillStyle='black';
+ctx.fillRect(0,0,canvas.width,canvas.height);
+
+// --- Eventos de herramientas ---
+document.getElementById('colorPicker').addEventListener('change', e => brushColor = e.target.value);
+document.getElementById('brushSize').addEventListener('change', e => brushSize = parseInt(e.target.value));
+
+document.getElementById('brushBtn').addEventListener('click', ()=> tool='brush');
+document.getElementById('rectBtn').addEventListener('click', ()=> tool='rect');
+document.getElementById('circleBtn').addEventListener('click', ()=> tool='circle');
+document.getElementById('textBtn').addEventListener('click', ()=> tool='text');
+document.getElementById('eraseBtn').addEventListener('click', ()=> tool='erase');
+
+document.getElementById('undoBtn').addEventListener('click', undo);
+document.getElementById('redoBtn').addEventListener('click', redo);
+document.getElementById('clearBtn').addEventListener('click', clearCanvas);
+
+document.getElementById('zoomIn').addEventListener('click', ()=> changeZoom(zoom*1.5));
+document.getElementById('zoomOut').addEventListener('click', ()=> changeZoom(zoom/1.5));
+
+document.getElementById('importImg').addEventListener('change', importImage);
+document.getElementById('exportBtn').addEventListener('click', exportArduinoCode);
+
+resolutionSelect.addEventListener('change', ()=>{
+  const val = resolutionSelect.value.split('x');
+  resW = parseInt(val[0]);
+  resH = parseInt(val[1]);
+  canvas.width = resW;
+  canvas.height = resH;
+  clearCanvas();
+});
+
+// --- Dibujo ---
+canvas.addEventListener('mousedown', e=>{
+  saveHistory();
+  isDrawing = true;
+  startX = e.offsetX / zoom;
+  startY = e.offsetY / zoom;
+
+  if(tool==='text'){
+    let text = prompt("Ingresa el texto:");
+    if(text){
+      ctx.fillStyle = brushColor;
+      ctx.font = `${brushSize*4}px Arial`;
+      ctx.fillText(text, startX, startY);
+    }
+    isDrawing=false;
+  }
+});
+
+canvas.addEventListener('mousemove', e=>{
+  if(!isDrawing) return;
+  let x = e.offsetX / zoom;
+  let y = e.offsetY / zoom;
+
+  if(tool==='brush'){
+    ctx.fillStyle=brushColor;
+    ctx.fillRect(x,y,brushSize,brushSize);
+  } else if(tool==='erase'){
+    ctx.fillStyle='black';
+    ctx.fillRect(x,y,brushSize,brushSize);
+  }
+});
+
+canvas.addEventListener('mouseup', e=>{
+  if(!isDrawing) return;
+  let x = e.offsetX / zoom;
+  let y = e.offsetY / zoom;
+  if(tool==='rect'){
+    ctx.strokeStyle = brushColor;
+    ctx.lineWidth = brushSize;
+    ctx.strokeRect(startX,startY,x-startX,y-startY);
+  } else if(tool==='circle'){
+    ctx.strokeStyle = brushColor;
+    ctx.lineWidth = brushSize;
+    let radius = Math.sqrt(Math.pow(x-startX,2)+Math.pow(y-startY,2));
+    ctx.beginPath();
+    ctx.arc(startX,startY,radius,0,2*Math.PI);
+    ctx.stroke();
+  }
+  isDrawing=false;
+});
+
+// --- Funciones ---
+function saveHistory(){
+  history.push(ctx.getImageData(0,0,canvas.width,canvas.height));
+  if(history.length>50) history.shift();
+  redoHistory=[];
+}
+
+function undo(){
+  if(history.length>0){
+    redoHistory.push(ctx.getImageData(0,0,canvas.width,canvas.height));
+    let img = history.pop();
+    ctx.putImageData(img,0,0);
+  }
+}
+
+function redo(){
+  if(redoHistory.length>0){
+    history.push(ctx.getImageData(0,0,canvas.width,canvas.height));
+    let img = redoHistory.pop();
+    ctx.putImageData(img,0,0);
+  }
+}
+
+function clearCanvas(){
+  saveHistory();
+  ctx.fillStyle='black';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+}
+
+function changeZoom(newZoom){
+  zoom = newZoom;
+  canvas.style.width = canvas.width*zoom+'px';
+  canvas.style.height = canvas.height*zoom+'px';
+}
+
+function importImage(e){
+  let file = e.target.files[0];
+  if(!file) return;
+  let img = new Image();
+  img.onload = function(){
+    saveHistory();
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+  }
+  img.src = URL.createObjectURL(file);
+}
+
+function exportArduinoCode(){
+  const imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+  let code = `// Código generado para ST7735\n#include <Adafruit_GFX.h>\n#include <Adafruit_ST7735.h>\n\n`;
+  code += `const uint16_t PROGMEM screenData[${resW*resH}] = { \n`;
+
+  for(let y=0;y<imgData.height;y++){
+    for(let x=0;x<imgData.width;x++){
+      let i = (y*imgData.width + x)*4;
+      let r=imgData.data[i];
+      let g=imgData.data[i+1];
+      let b=imgData.data[i+2];
+      let color565 = ((r & 0xF8)<<8)|((g & 0xFC)<<3)|(b>>3);
+      code += '0x'+color565.toString(16).padStart(4,'0')+',';
+    }
+    code+='\n';
+  }
+
+  code += '};\n';
+  code += `\nvoid setup(){\n  tft.initR(INITR_BLACKTAB);\n  tft.setRotation(1);\n  tft.pushColors(screenData, ${resW*resH});\n}\nvoid loop(){}\n`;
+  document.getElementById('arduinoCode').value = code;
+}
+</script>
+
+</body>
+</html>
